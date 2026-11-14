@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        color: #202124;
+        font: 14px/1.5 Arial, sans-serif;
+        margin: 16px;
+      }
+      h2 { font-size: 18px; margin: 0 0 8px; }
+      p { color: #5f6368; }
+      label { display: block; font-weight: 600; margin: 16px 0 6px; }
+      input, textarea { box-sizing: border-box; font: inherit; width: 100%; }
+      input { padding: 8px; }
+      textarea {
+        min-height: 260px;
+        padding: 8px;
+        resize: vertical;
+        white-space: pre-wrap;
+      }
+      button { cursor: pointer; margin: 8px 8px 0 0; padding: 8px 10px; }
+      button.primary { background: #1a73e8; border: 0; color: #fff; }
+      button:disabled { cursor: progress; opacity: .65; }
+      #result, #forgetButton { display: none; }
+      #status { min-height: 22px; white-space: pre-wrap; }
+      .small { font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <h2>English Proofreader</h2>
+    <p>
+      Proofreading sends the current document text to ApyHub's EU service.
+      The API returns a corrected version, not inline issue locations.
+      API usage may be billed. Review the result before copying it into Docs.
+    </p>
+
+    <label for="token">ApyHub API token</label>
+    <input id="token" type="password" autocomplete="off"
+      placeholder="Paste your ApyHub API token">
+    <button id="saveButton" type="button" onclick="saveToken()">Save token</button>
+    <button id="forgetButton" type="button" onclick="forgetToken()">Forget saved token</button>
+    <p class="small">
+      The token is stored in your Apps Script user properties, not in the
+      document or source code. Use an ApyHub API token, not an MCP bearer token.
+    </p>
+
+    <button id="proofreadButton" class="primary" type="button"
+      onclick="proofread()">Proofread current document</button>
+    <div id="status" role="status" aria-live="polite"></div>
+
+    <section id="result">
+      <label for="correctedText">Corrected text</label>
+      <textarea id="correctedText" readonly></textarea>
+      <button type="button" onclick="selectResult()">Select text to copy</button>
+    </section>
+
+    <script>
+      const tokenInput = document.getElementById("token");
+      const saveButton = document.getElementById("saveButton");
+      const forgetButton = document.getElementById("forgetButton");
+      const proofreadButton = document.getElementById("proofreadButton");
+      const correctedText = document.getElementById("correctedText");
+      const result = document.getElementById("result");
+      const status = document.getElementById("status");
+
+      google.script.run
+        .withSuccessHandler(updateTokenState)
+        .withFailureHandler(showError)
+        .getSidebarState();
+
+      function saveToken() {
+        const token = tokenInput.value.trim();
+        if (!token) {
+          status.textContent = "Paste an ApyHub API token first.";
+          tokenInput.focus();
+          return;
+        }
+
+        setBusy(true, "Saving API token…");
+        google.script.run
+          .withSuccessHandler((state) => {
+            tokenInput.value = "";
+            updateTokenState(state);
+            setBusy(false, "API token saved for your account.");
+          })
+          .withFailureHandler(showError)
+          .saveApyHubToken(token);
+      }
+
+      function forgetToken() {
+        setBusy(true, "Removing saved token…");
+        google.script.run
+          .withSuccessHandler((state) => {
+            updateTokenState(state);
+            setBusy(false, "Saved API token removed.");
+          })
+          .withFailureHandler(showError)
+          .forgetApyHubToken();
+      }
+
+      function proofread() {
+        result.style.display = "none";
+        setBusy(true, "Sending document text to ApyHub…");
+        google.script.run
+          .withSuccessHandler((text) => {
+            correctedText.value = text;
+            result.style.display = "block";
+            setBusy(false, "Proofreading complete. Review the corrected text.");
+          })
+          .withFailureHandler(showError)
+          .proofreadCurrentDocument();
+      }
+
+      function selectResult() {
+        correctedText.focus();
+        correctedText.select();
+        status.textContent = "Text selected. Copy it with Ctrl+C or Command+C.";
+      }
+
+      function updateTokenState(state) {
+        forgetButton.style.display = state.hasToken ? "inline-block" : "none";
+        status.textContent = state.hasToken
+          ? "ApyHub API token is saved for your account."
+          : "Save an ApyHub API token to begin.";
+      }
+
+      function setBusy(busy, message) {
+        saveButton.disabled = busy;
+        forgetButton.disabled = busy;
+        proofreadButton.disabled = busy;
+        tokenInput.disabled = busy;
+        if (message) status.textContent = message;
+      }
+
+      function showError(error) {
+        setBusy(false, error && error.message
+          ? error.message
+          : "The request failed. Please try again.");
+      }
+    </script>
+  </body>
+</html>

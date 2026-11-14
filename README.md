@@ -1,60 +1,69 @@
 # Grammar & Style Checker
 
-A small Chrome and Firefox extension prototype for Google Docs. It checks text
-locally for two demo spelling mistakes (`teh` and `adn`) and helps locate or
-copy a fix. It is not a full grammar checker.
+This repository includes a Google Docs-bound Apps Script sidebar and a Chrome/
+Firefox extension. For a Docs-native workflow that can read the active
+document through `DocumentApp`, use the Apps Script version in [docs-addon/](./docs-addon/).
 
-## Install in Chrome
+## Set up the Google Docs sidebar
 
-1. Download or clone this project and keep `manifest.json` and `content.js`
-   together in the same folder.
-2. In Chrome, open `chrome://extensions`.
-3. Turn on **Developer mode**.
-4. Click **Load unpacked** and select the project folder.
-5. Open or reload a Google Docs document, then click **Grammar check** at the
-   bottom-right of the page.
+This is a bound Apps Script project for your own Docs, not a Marketplace
+listing. No browser extension or Google Docs DOM allowlisting is needed.
 
-To pick up code changes later, return to `chrome://extensions` and click the
-extension's **Reload** button, then reload the Docs tab.
+1. Open the Google Doc where you want the checker.
+2. Select **Extensions → Apps Script**.
+3. In `Code.gs`, replace the starter content with
+   [`docs-addon/Code.gs`](./docs-addon/Code.gs).
+4. Click **+** beside Files, choose **HTML**, name it `Sidebar`, and paste
+   [`docs-addon/Sidebar.html`](./docs-addon/Sidebar.html).
+5. In Apps Script **Project Settings**, enable **Show "appsscript.json"
+   manifest file in editor**, then replace its contents with
+   [`docs-addon/appsscript.json`](./docs-addon/appsscript.json).
+6. Save the project, return to the Doc, and reload the page.
+7. Open **Grammar & Style → Open English Proofreader** and approve the
+   requested Google permissions.
+8. Paste a fresh ApyHub **API token** into the sidebar and choose **Save
+   token**. Then choose **Proofread current document**.
 
-## Install temporarily in Firefox
+The token is stored in Apps Script **User Properties** for your account, not
+in the document or source files. Use **Forget saved token** to remove it. The
+API token must be an ApyHub `apy-token` key; it is not the MCP Bearer token.
 
-Requires Firefox 140 or newer.
+## What the Docs sidebar does
 
-1. Download or clone this project.
-2. In Firefox, open `about:debugging#/runtime/this-firefox`.
-3. Click **Load Temporary Add-on…**.
-4. Choose this project's `manifest.json`.
-5. Open or reload a Google Docs document, then click **Grammar check** at the
-   bottom-right of the page.
+- Reads the active document text using `DocumentApp`.
+- Sends the text to ApyHub only when you click **Proofread current document**.
+- Shows the full corrected text; use **Select text to copy** and paste it into
+  Docs yourself.
+- Does not modify the document automatically.
 
-Firefox removes temporary add-ons when it closes. Repeat these steps after
-restarting Firefox. For persistent Firefox installation or distribution,
-the extension needs to be signed by Mozilla.
+ApyHub returns a corrected version rather than individual issue locations, so
+the add-on cannot underline or locate specific changes. The endpoint does not
+provide an English dialect setting. ApyHub usage may be billed; check your
+account's current plan and pricing.
 
-## Try it
+## Data handling
 
-If the extension can read the Docs editor text, add `teh` or `adn` to a
-paragraph and click **Grammar check**. Use **Locate** to highlight the match or
-**Copy suggestion** to copy its replacement. **Re-scan document** checks the
-current document contents again.
+The document text and API token are sent over HTTPS to ApyHub's EU endpoint
+when you start proofreading. Do not send confidential text unless you are
+comfortable with ApyHub processing it. The add-on does not log the token or
+save the document text.
 
-## Google Docs access limitation
+## Browser extension
 
-Google controls whether an extension can read Docs' editor text structure.
-This project only reads visible `.kix-lineview-text-block` text when it is
-already exposed. It does not and cannot unlock or bypass Google's extension
-allowlist. If the panel says **Text is not exposed**, the extension is
-installed, but Docs has not made readable text available to it.
+The root `manifest.json`, `content.js`, and `background.js` are the separate
+Chrome/Firefox extension version. It reads only Docs text that Google exposes
+to the extension and cannot bypass Google's allowlist. The Apps Script sidebar
+is the recommended option for the full active document.
 
-## Privacy and permissions
+## Tests
 
-- The extension runs only on `https://docs.google.com/document/*`.
-- It checks text locally; it makes no network requests.
-- `clipboardWrite` is used only when you click **Copy suggestion**.
-- Firefox declares that it collects no data.
-- It does not edit the document. Google Docs is not a regular editable HTML
-  document, so copying is used instead of unreliable simulated edits.
+With Node.js installed, validate the browser extension and its API job flow:
+
+```sh
+node --check content.js
+node --check background.js
+node --test tests/*.test.js
+```
 
 ## License
 
