@@ -1,27 +1,50 @@
 # Grammar & Style Checker
 
-A minimal Chrome Manifest V3 extension prototype for Google Docs. It injects a
-floating checker button and renders its panel inside a closed Shadow DOM so
-Docs styles do not leak into the interface.
+A prototype Chrome extension that adds a small checker panel to Google Docs.
+The current checker is a local demonstration for two common typos; it is not
+a full grammar service.
 
-## Load the extension
+## Features
 
-1. Open `chrome://extensions`.
+- Floating checker UI isolated from Docs styles with a Shadow DOM.
+- Scans visible Docs text nodes when the editor exposes them to the extension.
+- Demo checks for `teh` → `the` and `adn` → `and`.
+- Locates a match with an on-screen highlight and copies its suggestion.
+- Does not send document contents to a server or directly edit the document.
+
+## Install for local testing
+
+1. Open `chrome://extensions` in Chrome.
 2. Enable **Developer mode**.
-3. Select **Load unpacked** and choose this folder.
+3. Select **Load unpacked** and choose this project directory.
 4. Open or reload a Google Docs document and select **Grammar check**.
 
-## Current behavior
+## Permissions and privacy
 
-- Reads visible `.kix-lineview-text-block` text only if Docs exposes those DOM
-  nodes to the extension.
-- Runs a local demo check for `teh` and `adn`.
-- Locates matches with a visual highlight and copies a suggested replacement.
-- Does not send document text to a service or directly edit the document.
-- Requests Chrome's `clipboardWrite` permission for the copy action.
+- The content script is limited to `https://docs.google.com/document/*`.
+- `clipboardWrite` is used only when you select **Copy suggestion**.
+- There are no network requests, analytics, or external dependencies.
+- Document text is processed locally by the demo checker.
 
-Google controls access to the Docs editor's text DOM. This extension does not
-try to circumvent that access control; if the text is unavailable, the panel
-reports that limitation. Google Docs' internal editor is not a normal editable
-DOM, so copying a suggestion is used instead of pretending to apply a reliable
-in-place correction.
+## Limitations
+
+Google controls whether the Docs editor exposes its text structure to an
+extension. If the required text nodes are unavailable, scanning cannot proceed.
+This project does not attempt to bypass Google's extension allowlist.
+
+Docs is not a regular editable HTML document, so the prototype does not apply
+changes directly. It also does not currently provide a live grammar API,
+background scanning, or comprehensive language/style rules.
+
+## Development checks
+
+With Node.js installed, validate the script and manifest:
+
+```sh
+node --check content.js
+node -e "JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))"
+```
+
+## License
+
+Licensed under the [MIT License](./LICENSE).
