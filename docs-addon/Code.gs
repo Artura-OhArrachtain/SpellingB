@@ -1,12 +1,22 @@
-const APYHUB_API_URL_ =
-  "https://api.eu.apyhub.com/sharpapi/proofread-text-grammar-check";
-const APYHUB_TOKEN_PROPERTY_ = "APYHUB_API_TOKEN";
-const JOB_TIMEOUT_MS_ = 120000;
+const DICTIONARY_API_URL_ = "https://api.dictionaryapi.dev/api/v2/entries/en/";
+const CACHE_SECONDS_ = 21600;
+const CACHE_READ_BATCH_SIZE_ = 100;
+const LOOKUP_BATCH_SIZE_ = 10;
+const COMMON_CONTRACTIONS_ = new Set([
+  "ain't", "aren't", "can't", "could've", "couldn't", "didn't", "doesn't",
+  "don't", "hadn't", "hasn't", "haven't", "he'd", "he'll", "he's", "i'd",
+  "i'll", "i'm", "i've", "isn't", "it'd", "it'll", "it's", "let's", "might've",
+  "mightn't", "must've", "mustn't", "shan't", "she'd", "she'll", "she's",
+  "should've", "shouldn't", "that'll", "that's", "there's", "they'd", "they'll",
+  "they're", "they've", "wasn't", "we'd", "we'll", "we're", "we've", "weren't",
+  "what'll", "what's", "when's", "where's", "who's", "why's", "won't",
+  "would've", "wouldn't", "you'd", "you'll", "you're", "you've"
+]);
 
 function onOpen() {
   DocumentApp.getUi()
     .createMenu("Grammar & Style")
-    .addItem("Open English Proofreader", "showProofreader")
+    .addItem("Open Spelling Checker", "showSpellingChecker")
     .addToUi();
 }
 
@@ -14,126 +24,191 @@ function onInstall() {
   onOpen();
 }
 
-function showProofreader() {
+function showSpellingChecker() {
   const sidebar = HtmlService.createHtmlOutputFromFile("Sidebar")
-    .setTitle("English Proofreader");
+    .setTitle("English Spelling Checker");
   DocumentApp.getUi().showSidebar(sidebar);
 }
 
-function getSidebarState() {
+function checkDocumentSpelling() {
+  const text = DocumentApp.getActiveDocument().getBody().getText();
+  if (!text.trim()) {
+    throw new Error("The current document has no readable text to check.");
+  }
+
+  const words = extractWords_(text);
+  if (words.length === 0) {
+    return { checkedWords: 0, unrecognizedWords: [] };
+  }
+
+  const dictionaryResults = lookupWords_(words.map((word) => word.lookup));
+  const unrecognizedWords = words
+    .filter((word) => !dictionaryResults[word.lookup])
+    .flatMap((word) => groupOccurrences_(word));
+
   return {
-    hasToken: Boolean(
-      PropertiesService.getUserProperties().getProperty(APYHUB_TOKEN_PROPERTY_)
-    )
+    checkedWords: words.length,
+    unrecognizedWords: unrecognizedWords
   };
 }
 
-function saveApyHubToken(token) {
-  if (typeof token !== "string" || !token.trim()) {
-    throw new Error("Paste an ApyHub API token before saving.");
+function locateWordOccurrence(word, occurrence) {
+  if (typeof word !== "string" ||
+      !/^[\p{L}]+(?:['’][\p{L}]+)*$/u.test(word)) {
+    throw new Error("Invalid word to locate.");
+  }
+  if (!Number.isInteger(occurrence) || occurrence < 0 || occurrence > 10000) {
+    throw new Error("Invalid occurrence to locate.");
   }
 
-  PropertiesService.getUserProperties()
-    .setProperty(APYHUB_TOKEN_PROPERTY_, token.trim());
-  return getSidebarState();
-}
-
-function forgetApyHubToken() {
-  PropertiesService.getUserProperties()
-    .deleteProperty(APYHUB_TOKEN_PROPERTY_);
-  return getSidebarState();
-}
-
-function proofreadCurrentDocument() {
-  const token = PropertiesService.getUserProperties()
-    .getProperty(APYHUB_TOKEN_PROPERTY_);
-  if (!token) {
-    throw new Error("Save your ApyHub API token before proofreading.");
-  }
-
+  const pattern = "(?i)\\b" + escapeRegex_(word) + "\\b";
   const document = DocumentApp.getActiveDocument();
-  const text = document.getBody().getText();
-  if (!text.trim()) {
-    throw new Error("The current document has no readable text to proofread.");
+  const body = document.getBody();
+  let found = null;
+
+  for (let index = 0; index <= occurrence; index++) {
+    found = found ? body.findText(pattern, found) : body.findText(pattern);
+    if (!found) {
+      throw new Error("That word has moved or was removed. Run the spelling check again.");
+    }
   }
 
-  const submit = fetchApyHubJson_(APYHUB_API_URL_, {
-    method: "post",
-    contentType: "application/json",
-    headers: { "apy-token": token },
-    payload: JSON.stringify({ content: text })
+  const range = document.newRange();
+  range.addElement(
+    found.getElement(),
+    found.getStartOffset(),
+    found.getEndOffsetInclusive()
+  );
+  document.setSelection(range.build());
+  return true;
+}
+
+function extractWords_(text) {
+  const entries = new Map();
+  const pattern = /\p{L}+(?:['’]\p{L}+)*/gu;
+  let match;
+
+  while ((match = pattern.exec(text)) !== null) {
+    const original = match[0];
+    const normalized = original.toLowerCase().replace(/’/g, "'");
+    if (normalized.length < 2 || COMMON_CONTRACTIONS_.has(normalized)) continue;
+
+    const lookup = /'s$/.test(normalized) ? normalized.slice(0, -2) : normalized;
+    if (lookup.length < 2) continue;
+
+    if (!entries.has(lookup)) {
+      entries.set(lookup, { lookup: lookup, occurrences: [] });
+    }
+    entries.get(lookup).occurrences.push({
+      original: original,
+      index: match.index
+    });
+  }
+
+  return Array.from(entries.values());
+}
+
+function groupOccurrences_(entry) {
+  const groups = new Map();
+  entry.occurrences.forEach((occurrence) => {
+    const key = occurrence.original.toLowerCase();
+    if (!groups.has(key)) {
+      groups.set(key, { word: occurrence.original, count: 0 });
+    }
+    groups.get(key).count++;
   });
-  if (submit.statusCode === 429) {
-    throw new Error("ApyHub rate limit reached. Wait a little and try again.");
+  return Array.from(groups.values());
+}
+
+function lookupWords_(words) {
+  const cache = CacheService.getUserCache();
+  const cached = {};
+
+  for (let start = 0; start < words.length; start += CACHE_READ_BATCH_SIZE_) {
+    const batch = words.slice(start, start + CACHE_READ_BATCH_SIZE_);
+    const keys = batch.map((word) => "dictionary-en-" + word);
+    Object.assign(cached, cache.getAll(keys));
   }
 
-  const jobId = submit.data && submit.data.job_id;
-  if (typeof jobId !== "string" || !jobId) {
-    throw new Error("ApyHub did not return a proofreading job ID.");
+  const results = {};
+  const uncached = [];
+  words.forEach((word) => {
+    const value = cached["dictionary-en-" + word];
+    if (value === "1") {
+      results[word] = true;
+    } else if (value === "0") {
+      results[word] = false;
+    } else {
+      uncached.push(word);
+    }
+  });
+
+  for (let start = 0; start < uncached.length; start += LOOKUP_BATCH_SIZE_) {
+    const batch = uncached.slice(start, start + LOOKUP_BATCH_SIZE_);
+    lookupBatch_(batch, results, cache);
   }
 
-  const deadline = Date.now() + JOB_TIMEOUT_MS_;
-  let waitMs = 1000;
+  return results;
+}
 
-  while (Date.now() < deadline) {
-    Utilities.sleep(waitMs);
-    const statusUrl = APYHUB_API_URL_ + "/job/status/" + encodeURIComponent(jobId);
-    const statusResponse = fetchApyHubJson_(statusUrl, {
+function lookupBatch_(words, results, cache) {
+  let pending = words;
+  let attempt = 0;
+
+  while (pending.length > 0) {
+    const responses = UrlFetchApp.fetchAll(pending.map((word) => ({
+      url: DICTIONARY_API_URL_ + encodeURIComponent(word),
       method: "get",
-      headers: { "apy-token": token }
+      muteHttpExceptions: true
+    })));
+    const retry = [];
+
+    responses.forEach((response, index) => {
+      const word = pending[index];
+      const status = response.getResponseCode();
+
+      if (status === 404) {
+        results[word] = false;
+      } else if (status >= 200 && status < 300) {
+        let entries;
+        try {
+          entries = JSON.parse(response.getContentText());
+        } catch (error) {
+          throw new Error("The dictionary service returned an invalid response.");
+        }
+        if (!Array.isArray(entries) || entries.length === 0) {
+          throw new Error("The dictionary service returned an invalid response.");
+        }
+        results[word] = true;
+      } else if (status === 429 || status >= 500) {
+        retry.push(word);
+      } else {
+        throw new Error(
+          "Dictionary lookup failed (HTTP " + status + "). Try again later."
+        );
+      }
     });
 
-    if (statusResponse.statusCode === 429) {
-      waitMs = Math.min(waitMs * 2, 8000);
+    if (retry.length > 0) {
+      attempt++;
+      if (attempt > 3) {
+        throw new Error("The dictionary service is busy. Try again later.");
+      }
+      Utilities.sleep(Math.min(1000 * Math.pow(2, attempt - 1), 8000));
+      pending = retry;
       continue;
     }
 
-    waitMs = 1000;
-    const attributes = statusResponse.data &&
-      statusResponse.data.data &&
-      statusResponse.data.data.attributes;
-
-    if (attributes && attributes.status === "success") {
-      if (typeof attributes.result !== "string") {
-        throw new Error("ApyHub returned an invalid proofreading result.");
-      }
-      return attributes.result;
-    }
-
-    if (attributes && attributes.status === "failed") {
-      throw new Error("ApyHub could not proofread this document.");
-    }
-
-    if (!attributes ||
-        (attributes.status !== "queued" && attributes.status !== "running")) {
-      throw new Error("ApyHub returned an unknown proofreading job status.");
-    }
+    pending = [];
   }
 
-  throw new Error("Proofreading timed out. Try again with a shorter document.");
+  const cacheValues = {};
+  words.forEach((word) => {
+    cacheValues["dictionary-en-" + word] = results[word] ? "1" : "0";
+  });
+  cache.putAll(cacheValues, CACHE_SECONDS_);
 }
 
-function fetchApyHubJson_(url, options) {
-  const response = UrlFetchApp.fetch(url, Object.assign({}, options, {
-    muteHttpExceptions: true
-  }));
-  const statusCode = response.getResponseCode();
-
-  if (statusCode === 429) {
-    return { statusCode: statusCode, data: null };
-  }
-  if (statusCode === 401) {
-    throw new Error("ApyHub rejected the API token. Check it and try again.");
-  }
-  if (statusCode < 200 || statusCode >= 300) {
-    throw new Error("ApyHub request failed (HTTP " + statusCode + ").");
-  }
-
-  let data;
-  try {
-    data = JSON.parse(response.getContentText());
-  } catch (error) {
-    throw new Error("ApyHub returned an invalid response.");
-  }
-  return { statusCode: statusCode, data: data };
+function escapeRegex_(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

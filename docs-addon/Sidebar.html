@@ -10,133 +10,121 @@
       }
       h2 { font-size: 18px; margin: 0 0 8px; }
       p { color: #5f6368; }
-      label { display: block; font-weight: 600; margin: 16px 0 6px; }
-      input, textarea { box-sizing: border-box; font: inherit; width: 100%; }
-      input { padding: 8px; }
-      textarea {
-        min-height: 260px;
-        padding: 8px;
-        resize: vertical;
-        white-space: pre-wrap;
+      button {
+        cursor: pointer;
+        margin: 8px 8px 0 0;
+        padding: 8px 10px;
       }
-      button { cursor: pointer; margin: 8px 8px 0 0; padding: 8px 10px; }
-      button.primary { background: #1a73e8; border: 0; color: #fff; }
       button:disabled { cursor: progress; opacity: .65; }
-      #result, #forgetButton { display: none; }
+      button.locate { color: #1a73e8; }
       #status { min-height: 22px; white-space: pre-wrap; }
+      #results { margin-top: 16px; }
+      .word {
+        border-bottom: 1px solid #dadce0;
+        padding: 12px 0;
+      }
+      .word-name { font-weight: 600; overflow-wrap: anywhere; }
+      .word-detail { color: #5f6368; font-size: 12px; }
       .small { font-size: 12px; }
     </style>
   </head>
   <body>
-    <h2>English Proofreader</h2>
+    <h2>English Spelling Checker</h2>
     <p>
-      Proofreading sends the current document text to ApyHub's EU service.
-      The API returns a corrected version, not inline issue locations.
-      API usage may be billed. Review the result before copying it into Docs.
+      Checks individual words against DictionaryAPI.dev. It does not check
+      grammar or suggest replacement spellings. Unknown words can be names,
+      specialist terms, or words the dictionary does not include.
     </p>
-
-    <label for="token">ApyHub API token</label>
-    <input id="token" type="password" autocomplete="off"
-      placeholder="Paste your ApyHub API token">
-    <button id="saveButton" type="button" onclick="saveToken()">Save token</button>
-    <button id="forgetButton" type="button" onclick="forgetToken()">Forget saved token</button>
     <p class="small">
-      The token is stored in your Apps Script user properties, not in the
-      document or source code. Use an ApyHub API token, not an MCP bearer token.
+      Checking sends unique words to the online dictionary. The document's
+      sentences are not sent. Results may be incomplete.
     </p>
 
-    <button id="proofreadButton" class="primary" type="button"
-      onclick="proofread()">Proofread current document</button>
+    <button id="checkButton" type="button" onclick="checkSpelling()">
+      Check document spelling
+    </button>
     <div id="status" role="status" aria-live="polite"></div>
-
-    <section id="result">
-      <label for="correctedText">Corrected text</label>
-      <textarea id="correctedText" readonly></textarea>
-      <button type="button" onclick="selectResult()">Select text to copy</button>
-    </section>
+    <div id="results"></div>
 
     <script>
-      const tokenInput = document.getElementById("token");
-      const saveButton = document.getElementById("saveButton");
-      const forgetButton = document.getElementById("forgetButton");
-      const proofreadButton = document.getElementById("proofreadButton");
-      const correctedText = document.getElementById("correctedText");
-      const result = document.getElementById("result");
+      const checkButton = document.getElementById("checkButton");
       const status = document.getElementById("status");
+      const results = document.getElementById("results");
 
-      google.script.run
-        .withSuccessHandler(updateTokenState)
-        .withFailureHandler(showError)
-        .getSidebarState();
+      function checkSpelling() {
+        setBusy(true, "Checking unique words against the online dictionary…");
+        results.replaceChildren();
 
-      function saveToken() {
-        const token = tokenInput.value.trim();
-        if (!token) {
-          status.textContent = "Paste an ApyHub API token first.";
-          tokenInput.focus();
+        google.script.run
+          .withSuccessHandler(showResults)
+          .withFailureHandler(showError)
+          .checkDocumentSpelling();
+      }
+
+      function showResults(result) {
+        setBusy(false, "");
+        results.replaceChildren();
+
+        if (result.unrecognizedWords.length === 0) {
+          status.textContent = result.checkedWords === 0
+            ? "No words were available to check."
+            : "No unrecognized words found. This does not guarantee the text is error-free.";
           return;
         }
 
-        setBusy(true, "Saving API token…");
-        google.script.run
-          .withSuccessHandler((state) => {
-            tokenInput.value = "";
-            updateTokenState(state);
-            setBusy(false, "API token saved for your account.");
-          })
-          .withFailureHandler(showError)
-          .saveApyHubToken(token);
+        status.textContent =
+          `${result.unrecognizedWords.length} word form(s) not found in the dictionary.`;
+        result.unrecognizedWords.forEach((issue) => {
+          results.append(makeWordRow(issue));
+        });
       }
 
-      function forgetToken() {
-        setBusy(true, "Removing saved token…");
-        google.script.run
-          .withSuccessHandler((state) => {
-            updateTokenState(state);
-            setBusy(false, "Saved API token removed.");
-          })
-          .withFailureHandler(showError)
-          .forgetApyHubToken();
-      }
+      function makeWordRow(issue) {
+        const row = document.createElement("section");
+        row.className = "word";
 
-      function proofread() {
-        result.style.display = "none";
-        setBusy(true, "Sending document text to ApyHub…");
-        google.script.run
-          .withSuccessHandler((text) => {
-            correctedText.value = text;
-            result.style.display = "block";
-            setBusy(false, "Proofreading complete. Review the corrected text.");
-          })
-          .withFailureHandler(showError)
-          .proofreadCurrentDocument();
-      }
+        const name = document.createElement("div");
+        name.className = "word-name";
+        name.textContent = issue.word;
 
-      function selectResult() {
-        correctedText.focus();
-        correctedText.select();
-        status.textContent = "Text selected. Copy it with Ctrl+C or Command+C.";
-      }
+        const detail = document.createElement("div");
+        detail.className = "word-detail";
+        detail.textContent =
+          `Not found in dictionary · ${issue.count} occurrence(s)`;
 
-      function updateTokenState(state) {
-        forgetButton.style.display = state.hasToken ? "inline-block" : "none";
-        status.textContent = state.hasToken
-          ? "ApyHub API token is saved for your account."
-          : "Save an ApyHub API token to begin.";
+        const locate = document.createElement("button");
+        locate.className = "locate";
+        locate.type = "button";
+        locate.textContent = "Locate";
+        let occurrence = 0;
+        locate.addEventListener("click", () => {
+          locate.disabled = true;
+          google.script.run
+            .withSuccessHandler(() => {
+              occurrence = (occurrence + 1) % issue.count;
+              status.textContent = `Located “${issue.word}”.`;
+              locate.disabled = false;
+            })
+            .withFailureHandler((error) => {
+              locate.disabled = false;
+              showError(error);
+            })
+            .locateWordOccurrence(issue.word, occurrence);
+        });
+
+        row.append(name, detail, locate);
+        return row;
       }
 
       function setBusy(busy, message) {
-        saveButton.disabled = busy;
-        forgetButton.disabled = busy;
-        proofreadButton.disabled = busy;
-        tokenInput.disabled = busy;
+        checkButton.disabled = busy;
         if (message) status.textContent = message;
       }
 
       function showError(error) {
         setBusy(false, error && error.message
           ? error.message
-          : "The request failed. Please try again.");
+          : "The spelling check failed. Please try again.");
       }
     </script>
   </body>

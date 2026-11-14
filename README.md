@@ -1,17 +1,17 @@
 # Grammar & Style Checker
 
-This repository includes a Google Docs-bound Apps Script sidebar and a Chrome/
-Firefox extension. For a Docs-native workflow that can read the active
-document through `DocumentApp`, use the Apps Script version in [docs-addon/](./docs-addon/).
+The recommended Google Docs version is a bound Apps Script sidebar in
+[docs-addon/](./docs-addon/). It checks spelling against DictionaryAPI.dev and
+does not require an API key.
 
-## Set up the Google Docs sidebar
+## Set up the Google Docs spelling checker
 
-This is a bound Apps Script project for your own Docs, not a Marketplace
-listing. No browser extension or Google Docs DOM allowlisting is needed.
+This is a script bound to one Google Doc, not a Google Workspace Marketplace
+listing.
 
 1. Open the Google Doc where you want the checker.
 2. Select **Extensions → Apps Script**.
-3. In `Code.gs`, replace the starter content with
+3. Replace the contents of `Code.gs` with
    [`docs-addon/Code.gs`](./docs-addon/Code.gs).
 4. Click **+** beside Files, choose **HTML**, name it `Sidebar`, and paste
    [`docs-addon/Sidebar.html`](./docs-addon/Sidebar.html).
@@ -19,47 +19,43 @@ listing. No browser extension or Google Docs DOM allowlisting is needed.
    manifest file in editor**, then replace its contents with
    [`docs-addon/appsscript.json`](./docs-addon/appsscript.json).
 6. Save the project, return to the Doc, and reload the page.
-7. Open **Grammar & Style → Open English Proofreader** and approve the
-   requested Google permissions.
-8. Paste a fresh ApyHub **API token** into the sidebar and choose **Save
-   token**. Then choose **Proofread current document**.
+7. Open **Grammar & Style → Open Spelling Checker** and approve the requested
+   Google permissions.
+8. Select **Check document spelling**.
 
-The token is stored in Apps Script **User Properties** for your account, not
-in the document or source files. Use **Forget saved token** to remove it. The
-API token must be an ApyHub `apy-token` key; it is not the MCP Bearer token.
+## What it checks
 
-## What the Docs sidebar does
+- Extracts words from the current Doc and checks each unique word with the
+  English endpoint at DictionaryAPI.dev.
+- Shows word forms that have no dictionary entry and provides a **Locate**
+  button for each.
+- Caches lookup results for up to six hours to reduce repeated requests.
+- Does not provide replacement suggestions, check grammar, or modify the Doc.
 
-- Reads the active document text using `DocumentApp`.
-- Sends the text to ApyHub only when you click **Proofread current document**.
-- Shows the full corrected text; use **Select text to copy** and paste it into
-  Docs yourself.
-- Does not modify the document automatically.
-
-ApyHub returns a corrected version rather than individual issue locations, so
-the add-on cannot underline or locate specific changes. The endpoint does not
-provide an English dialect setting. ApyHub usage may be billed; check your
-account's current plan and pricing.
+An unrecognized word may be a name, specialist term, inflection, or dictionary
+gap rather than a spelling error. Review results before changing text.
 
 ## Data handling
 
-The document text and API token are sent over HTTPS to ApyHub's EU endpoint
-when you start proofreading. Do not send confidential text unless you are
-comfortable with ApyHub processing it. The add-on does not log the token or
-save the document text.
+DictionaryAPI.dev receives individual unique words, not complete sentences or
+the whole document. Lookups happen only when you click **Check document
+spelling**. Results are cached in Apps Script's per-user cache. This checker
+does not use an API key.
 
 ## Browser extension
 
 The root `manifest.json`, `content.js`, and `background.js` are the separate
-Chrome/Firefox extension version. It reads only Docs text that Google exposes
-to the extension and cannot bypass Google's allowlist. The Apps Script sidebar
-is the recommended option for the full active document.
+Chrome/Firefox version, which uses ApyHub for full proofreading. It requires an
+ApyHub API key and remains subject to Google Docs' DOM allowlist; details are
+in the [extension setup](#browser-extension).
 
-## Tests
+## Development checks
 
-With Node.js installed, validate the browser extension and its API job flow:
+With Node.js installed, validate the Apps Script files and run browser extension
+tests:
 
 ```sh
+node --check < docs-addon/Code.gs
 node --check content.js
 node --check background.js
 node --test tests/*.test.js
