@@ -9,7 +9,10 @@
         margin: 16px;
       }
       h2 { font-size: 18px; margin: 0 0 8px; }
+      h3 { font-size: 15px; margin: 20px 0 6px; }
       p { color: #5f6368; }
+      label { display: block; font-weight: 600; margin: 10px 0 5px; }
+      input { box-sizing: border-box; font: inherit; padding: 8px; width: 100%; }
       button {
         cursor: pointer;
         margin: 8px 8px 0 0;
@@ -18,7 +21,7 @@
       button:disabled { cursor: progress; opacity: .65; }
       button.locate { color: #1a73e8; }
       #status { min-height: 22px; white-space: pre-wrap; }
-      #results { margin-top: 16px; }
+      #spellResults, #synonymResults { margin-top: 12px; }
       .word {
         border-bottom: 1px solid #dadce0;
         padding: 12px 0;
@@ -29,41 +32,113 @@
     </style>
   </head>
   <body>
-    <h2>English Spelling Checker</h2>
+    <h2>English Spelling & Thesaurus</h2>
     <p>
-      Checks individual words against DictionaryAPI.dev. It does not check
-      grammar or suggest replacement spellings. Unknown words can be names,
-      specialist terms, or words the dictionary does not include.
-    </p>
-    <p class="small">
-      Checking sends unique words to the online dictionary. The document's
-      sentences are not sent. Results may be incomplete.
+      Spelling checks look up unique words in DictionaryAPI.dev. Synonym
+      lookups use STANDS4 for one word you enter. Neither feature checks grammar.
     </p>
 
+    <h3>STANDS4 credentials</h3>
+    <label for="uid">UID</label>
+    <input id="uid" autocomplete="off" placeholder="STANDS4 UID">
+    <label for="tokenId">Token ID</label>
+    <input id="tokenId" type="password" autocomplete="off"
+      placeholder="STANDS4 token ID">
+    <button id="saveCredentialsButton" type="button" onclick="saveCredentials()">
+      Save credentials
+    </button>
+    <button id="forgetCredentialsButton" type="button" hidden onclick="forgetCredentials()">
+      Forget saved credentials
+    </button>
+    <p class="small">
+      Credentials are stored in your Apps Script user properties. STANDS4
+      requires the token ID in the request URL. Synonym lookups send only the
+      word entered below.
+    </p>
+
+    <h3>Spelling</h3>
+    <p class="small">
+      Unrecognized words may be names, specialist terms, or dictionary gaps.
+      The dictionary does not suggest replacements.
+    </p>
     <button id="checkButton" type="button" onclick="checkSpelling()">
       Check document spelling
     </button>
+    <div id="spellResults"></div>
+
+    <h3>Find synonyms</h3>
+    <label for="synonymWord">Word</label>
+    <input id="synonymWord" autocomplete="off" placeholder="Enter a word">
+    <button id="findSynonymsButton" type="button" onclick="findSynonyms()">
+      Find synonyms
+    </button>
+    <div id="synonymResults"></div>
+
     <div id="status" role="status" aria-live="polite"></div>
-    <div id="results"></div>
 
     <script>
-      const checkButton = document.getElementById("checkButton");
+      const uidInput = document.getElementById("uid");
+      const tokenIdInput = document.getElementById("tokenId");
+      const synonymWordInput = document.getElementById("synonymWord");
       const status = document.getElementById("status");
-      const results = document.getElementById("results");
+      const spellResults = document.getElementById("spellResults");
+      const synonymResults = document.getElementById("synonymResults");
+      const actionButtons = [
+        document.getElementById("saveCredentialsButton"),
+        document.getElementById("forgetCredentialsButton"),
+        document.getElementById("checkButton"),
+        document.getElementById("findSynonymsButton")
+      ];
+      const textInputs = [uidInput, tokenIdInput, synonymWordInput];
+
+      google.script.run
+        .withSuccessHandler(updateCredentialState)
+        .withFailureHandler(showError)
+        .getSidebarState();
+
+      function saveCredentials() {
+        if (!uidInput.value.trim() || !tokenIdInput.value.trim()) {
+          status.textContent = "Enter both your STANDS4 UID and token ID.";
+          return;
+        }
+
+        setBusy(true, "Saving STANDS4 credentials…");
+        google.script.run
+          .withSuccessHandler((state) => {
+            tokenIdInput.value = "";
+            updateCredentialState(state);
+            setBusy(false, "STANDS4 credentials saved for your account.");
+          })
+          .withFailureHandler(showError)
+          .saveStands4Credentials(uidInput.value, tokenIdInput.value);
+      }
+
+      function forgetCredentials() {
+        setBusy(true, "Removing saved STANDS4 credentials…");
+        google.script.run
+          .withSuccessHandler((state) => {
+            uidInput.value = "";
+            tokenIdInput.value = "";
+            updateCredentialState(state);
+            setBusy(false, "Saved STANDS4 credentials removed.");
+          })
+          .withFailureHandler(showError)
+          .forgetStands4Credentials();
+      }
 
       function checkSpelling() {
         setBusy(true, "Checking unique words against the online dictionary…");
-        results.replaceChildren();
+        spellResults.replaceChildren();
 
         google.script.run
-          .withSuccessHandler(showResults)
+          .withSuccessHandler(showSpellResults)
           .withFailureHandler(showError)
           .checkDocumentSpelling();
       }
 
-      function showResults(result) {
+      function showSpellResults(result) {
         setBusy(false, "");
-        results.replaceChildren();
+        spellResults.replaceChildren();
 
         if (result.unrecognizedWords.length === 0) {
           status.textContent = result.checkedWords === 0
@@ -75,7 +150,7 @@
         status.textContent =
           `${result.unrecognizedWords.length} word form(s) not found in the dictionary.`;
         result.unrecognizedWords.forEach((issue) => {
-          results.append(makeWordRow(issue));
+          spellResults.append(makeWordRow(issue));
         });
       }
 
@@ -116,15 +191,63 @@
         return row;
       }
 
+      function findSynonyms() {
+        const word = synonymWordInput.value.trim();
+        if (!word) {
+          status.textContent = "Enter a word to look up.";
+          synonymWordInput.focus();
+          return;
+        }
+
+        setBusy(true, `Looking up synonyms for “${word}”…`);
+        synonymResults.replaceChildren();
+        google.script.run
+          .withSuccessHandler(showSynonyms)
+          .withFailureHandler(showError)
+          .findSynonyms(word);
+      }
+
+      function showSynonyms(result) {
+        setBusy(false, "");
+        synonymResults.replaceChildren();
+
+        if (result.synonyms.length === 0) {
+          status.textContent = `No synonyms found for “${result.word}”.`;
+          return;
+        }
+
+        const list = document.createElement("ul");
+        result.synonyms.forEach((synonym) => {
+          const item = document.createElement("li");
+          item.textContent = synonym;
+          list.append(item);
+        });
+        synonymResults.append(list);
+        status.textContent =
+          `Synonyms for “${result.word}”. Choose one that fits your context.`;
+      }
+
+      function updateCredentialState(state) {
+        document.getElementById("forgetCredentialsButton").hidden = !state.hasStands4Credentials;
+        status.textContent = state.hasStands4Credentials
+          ? "STANDS4 credentials are saved for your account."
+          : "Save STANDS4 credentials to use synonym lookups.";
+      }
+
       function setBusy(busy, message) {
-        checkButton.disabled = busy;
+        actionButtons.forEach((button) => {
+          button.disabled = busy;
+        });
+        textInputs.forEach((input) => {
+          input.disabled = busy;
+        });
         if (message) status.textContent = message;
       }
 
       function showError(error) {
         setBusy(false, error && error.message
           ? error.message
-          : "The spelling check failed. Please try again.");
+          : "The request failed. Please try again.");
       }
     </script>
   </body>

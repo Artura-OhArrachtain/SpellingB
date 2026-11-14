@@ -1,7 +1,10 @@
 const DICTIONARY_API_URL_ = "https://api.dictionaryapi.dev/api/v2/entries/en/";
+const STANDS4_SYNONYM_API_URL_ = "https://www.stands4.com/services/v2/syno.php";
 const CACHE_SECONDS_ = 21600;
 const CACHE_READ_BATCH_SIZE_ = 100;
 const LOOKUP_BATCH_SIZE_ = 10;
+const STANDS4_UID_PROPERTY_ = "STANDS4_UID";
+const STANDS4_TOKEN_PROPERTY_ = "STANDS4_TOKEN_ID";
 const COMMON_CONTRACTIONS_ = new Set([
   "ain't", "aren't", "can't", "could've", "couldn't", "didn't", "doesn't",
   "don't", "hadn't", "hasn't", "haven't", "he'd", "he'll", "he's", "i'd",
@@ -16,7 +19,7 @@ const COMMON_CONTRACTIONS_ = new Set([
 function onOpen() {
   DocumentApp.getUi()
     .createMenu("Grammar & Style")
-    .addItem("Open Spelling Checker", "showSpellingChecker")
+    .addItem("Open Spelling & Thesaurus", "showSpellingChecker")
     .addToUi();
 }
 
@@ -26,8 +29,92 @@ function onInstall() {
 
 function showSpellingChecker() {
   const sidebar = HtmlService.createHtmlOutputFromFile("Sidebar")
-    .setTitle("English Spelling Checker");
+    .setTitle("English Spelling & Thesaurus");
   DocumentApp.getUi().showSidebar(sidebar);
+}
+
+function getSidebarState() {
+  const properties = PropertiesService.getUserProperties();
+  return {
+    hasStands4Credentials: Boolean(
+      properties.getProperty(STANDS4_UID_PROPERTY_) &&
+      properties.getProperty(STANDS4_TOKEN_PROPERTY_)
+    )
+  };
+}
+
+function saveStands4Credentials(uid, tokenId) {
+  if (typeof uid !== "string" || !uid.trim() ||
+      typeof tokenId !== "string" || !tokenId.trim()) {
+    throw new Error("Enter both your STANDS4 UID and token ID.");
+  }
+
+  const properties = PropertiesService.getUserProperties();
+  properties.setProperties({
+    [STANDS4_UID_PROPERTY_]: uid.trim(),
+    [STANDS4_TOKEN_PROPERTY_]: tokenId.trim()
+  });
+  return getSidebarState();
+}
+
+function forgetStands4Credentials() {
+  const properties = PropertiesService.getUserProperties();
+  properties.deleteProperty(STANDS4_UID_PROPERTY_);
+  properties.deleteProperty(STANDS4_TOKEN_PROPERTY_);
+  return getSidebarState();
+}
+
+function findSynonyms(word) {
+  if (typeof word !== "string" ||
+      !/^[\p{L}]+(?:['’\-][\p{L}]+)*$/u.test(word.trim()) ||
+      word.trim().length > 100) {
+    throw new Error("Enter a single word to look up.");
+  }
+
+  const properties = PropertiesService.getUserProperties();
+  const uid = properties.getProperty(STANDS4_UID_PROPERTY_);
+  const tokenId = properties.getProperty(STANDS4_TOKEN_PROPERTY_);
+  if (!uid || !tokenId) {
+    throw new Error("Save your STANDS4 credentials before looking up synonyms.");
+  }
+
+  const normalizedWord = word.trim();
+  const url = STANDS4_SYNONYM_API_URL_ +
+    "?uid=" + encodeURIComponent(uid) +
+    "&tokenid=" + encodeURIComponent(tokenId) +
+    "&word=" + encodeURIComponent(normalizedWord) +
+    "&format=json";
+  const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  const statusCode = response.getResponseCode();
+
+  if (statusCode === 404) {
+    return { word: normalizedWord, synonyms: [] };
+  }
+  if (statusCode === 401 || statusCode === 403) {
+    throw new Error("STANDS4 rejected the UID or token ID. Check your credentials.");
+  }
+  if (statusCode < 200 || statusCode >= 300) {
+    throw new Error("STANDS4 synonym lookup failed (HTTP " + statusCode + ").");
+  }
+
+  let data;
+  try {
+    data = JSON.parse(response.getContentText());
+  } catch (error) {
+    throw new Error("STANDS4 returned an invalid response.");
+  }
+  if (data && data.error) {
+    const apiError = String(data.error);
+    if (/invalid (user id|token)/i.test(apiError)) {
+      throw new Error("STANDS4 rejected the UID or token ID. Check your credentials.");
+    }
+    throw new Error("STANDS4 could not find synonyms for that word.");
+  }
+
+  return {
+    word: normalizedWord,
+    synonyms: extractSynonyms_(data)
+  };
 }
 
 function checkDocumentSpelling() {
@@ -118,6 +205,58 @@ function groupOccurrences_(entry) {
     groups.get(key).count++;
   });
   return Array.from(groups.values());
+}
+
+function extractSynonyms_(data) {
+  const synonyms = [];
+  const seen = new Set();
+
+  function visit(value) {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+
+    Object.keys(value).forEach((key) => {
+      const child = value[key];
+      if (key.toLowerCase() === "synonym") {
+        const values = Array.isArray(child) ? child : [child];
+        values.forEach((item) => {
+          const synonym = typeof item === "string"
+            ? item
+            : item && typeof item === "object"
+              ? item.word || item.term
+              : "";
+          if (typeof synonym === "string" &&
+              synonym.trim() &&
+              !seen.has(synonym.toLowerCase())) {
+            seen.add(synonym.toLowerCase());
+            synonyms.push(synonym.trim());
+          }
+        });
+      } else if (key.toLowerCase() === "synonyms") {
+        const values = Array.isArray(child)
+          ? child
+          : typeof child === "string"
+            ? child.split(/,\s*/)
+            : [];
+        values.forEach((item) => {
+          if (typeof item === "string" &&
+              item.trim() &&
+              !seen.has(item.toLowerCase())) {
+            seen.add(item.toLowerCase());
+            synonyms.push(item.trim());
+          }
+        });
+      } else {
+        visit(child);
+      }
+    });
+  }
+
+  visit(data);
+  return synonyms;
 }
 
 function lookupWords_(words) {

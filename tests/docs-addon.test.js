@@ -9,9 +9,11 @@ const scriptSource = readFile(
   "utf8"
 );
 
-async function loadAddOn(text, missingWords = []) {
+async function loadAddOn(text, missingWords = [], options = {}) {
   const cachedValues = new Map();
+  const savedProperties = new Map();
   const requests = [];
+  const synonymRequests = [];
   let selectedRange = null;
   const textElement = {};
 
@@ -56,6 +58,19 @@ async function loadAddOn(text, missingWords = []) {
 
   const context = {
     DocumentApp: { getActiveDocument: () => document },
+    PropertiesService: {
+      getUserProperties: () => ({
+        getProperty: (key) => savedProperties.get(key) || null,
+        setProperties(values) {
+          Object.entries(values).forEach(([key, value]) => {
+            savedProperties.set(key, value);
+          });
+        },
+        deleteProperty(key) {
+          savedProperties.delete(key);
+        }
+      })
+    },
     CacheService: {
       getUserCache: () => ({
         getAll(keys) {
@@ -73,6 +88,17 @@ async function loadAddOn(text, missingWords = []) {
       })
     },
     UrlFetchApp: {
+      fetch(url) {
+        synonymRequests.push(url);
+        const response = options.synonymResponse || {
+          status: 200,
+          body: JSON.stringify({ results: { result: [] } })
+        };
+        return {
+          getResponseCode: () => response.status,
+          getContentText: () => response.body
+        };
+      },
       fetchAll(batch) {
         return batch.map((request) => {
           requests.push(request.url);
@@ -93,6 +119,8 @@ async function loadAddOn(text, missingWords = []) {
   return {
     context,
     requests,
+    synonymRequests,
+    savedProperties,
     getSelectedRange: () => selectedRange
   };
 }
@@ -116,4 +144,62 @@ test("locates the requested occurrence of a word in the document", async () => {
   addOn.context.locateWordOccurrence("teh", 1);
 
   assert.deepEqual(addOn.getSelectedRange(), { startOffset: 10, endOffset: 12 });
+});
+
+test("stores STANDS4 credentials and parses deduplicated synonyms", async () => {
+  const addOn = await loadAddOn("", [], {
+    synonymResponse: {
+      status: 200,
+      body: JSON.stringify({
+        results: {
+          result: [
+            { synonym: "joyful" },
+            { synonym: "cheerful" },
+            { synonym: "joyful" }
+          ]
+        }
+      })
+    }
+  });
+
+  const savedState = addOn.context.saveStands4Credentials("user 1", "secret+token");
+  assert.equal(savedState.hasStands4Credentials, true);
+
+  const result = addOn.context.findSynonyms("happy");
+  assert.equal(result.word, "happy");
+  assert.deepEqual(Array.from(result.synonyms), ["joyful", "cheerful"]);
+
+  const requestUrl = new URL(addOn.synonymRequests[0]);
+  assert.equal(requestUrl.searchParams.get("uid"), "user 1");
+  assert.equal(requestUrl.searchParams.get("tokenid"), "secret+token");
+  assert.equal(requestUrl.searchParams.get("word"), "happy");
+  assert.equal(requestUrl.searchParams.get("format"), "json");
+});
+
+test("reports STANDS4 credential rejection instead of returning empty results", async () => {
+  const addOn = await loadAddOn("", [], {
+    synonymResponse: {
+      status: 200,
+      body: JSON.stringify({ error: "Invalid Token" })
+    }
+  });
+  addOn.context.saveStands4Credentials("uid", "bad-token");
+
+  assert.throws(
+    () => addOn.context.findSynonyms("happy"),
+    /STANDS4 rejected the UID or token ID/
+  );
+});
+
+test("returns an empty synonym list when STANDS4 has no matches", async () => {
+  const addOn = await loadAddOn("");
+  addOn.context.saveStands4Credentials("uid", "token");
+
+  const result = addOn.context.findSynonyms("happy");
+  assert.equal(result.word, "happy");
+  assert.deepEqual(Array.from(result.synonyms), []);
+  assert.equal(
+    addOn.context.forgetStands4Credentials().hasStands4Credentials,
+    false
+  );
 });
