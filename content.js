@@ -74,6 +74,8 @@
   const subtitle = shadow.querySelector(".subtitle");
   const results = shadow.querySelector(".results");
   const highlights = shadow.querySelector(".highlights");
+  let activeRange = null;
+  let highlightFrame = 0;
 
   launcher.addEventListener("click", () => {
     panel.hidden = !panel.hidden;
@@ -231,25 +233,49 @@
 
   function showHighlight(range) {
     clearHighlights();
+    if (!range.startContainer.isConnected) {
+      subtitle.textContent = "Text changed; re-scan the document";
+      return;
+    }
+
+    activeRange = range;
     const target = range.startContainer.parentElement;
-    target?.scrollIntoView({ block: "center", behavior: "smooth" });
-    requestAnimationFrame(() => {
-      for (const rect of range.getClientRects()) {
-        if (rect.width <= 0 || rect.height <= 0) continue;
-        const marker = document.createElement("div");
-        marker.className = "highlight";
-        marker.style.left = `${rect.left}px`;
-        marker.style.top = `${rect.top}px`;
-        marker.style.width = `${rect.width}px`;
-        marker.style.height = `${rect.height}px`;
-        highlights.append(marker);
-      }
-    });
+    target?.scrollIntoView({ block: "center", behavior: "auto" });
+    scheduleHighlightRender();
   }
 
   function clearHighlights() {
+    activeRange = null;
     highlights.replaceChildren();
   }
 
-  window.addEventListener("scroll", clearHighlights, { passive: true, capture: true });
+  function scheduleHighlightRender() {
+    if (highlightFrame) return;
+    highlightFrame = requestAnimationFrame(() => {
+      highlightFrame = 0;
+      renderHighlight();
+    });
+  }
+
+  function renderHighlight() {
+    highlights.replaceChildren();
+    if (!activeRange || !activeRange.startContainer.isConnected) {
+      activeRange = null;
+      return;
+    }
+
+    for (const rect of activeRange.getClientRects()) {
+      if (rect.width <= 0 || rect.height <= 0) continue;
+      const marker = document.createElement("div");
+      marker.className = "highlight";
+      marker.style.left = `${rect.left}px`;
+      marker.style.top = `${rect.top}px`;
+      marker.style.width = `${rect.width}px`;
+      marker.style.height = `${rect.height}px`;
+      highlights.append(marker);
+    }
+  }
+
+  window.addEventListener("scroll", scheduleHighlightRender, { passive: true, capture: true });
+  window.addEventListener("resize", scheduleHighlightRender, { passive: true });
 })();
